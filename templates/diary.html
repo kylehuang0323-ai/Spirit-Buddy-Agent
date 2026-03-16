@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>情绪日记 — 精神搭子</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; color: #fff; }
+        .glass { background: rgba(255,255,255,0.12); backdrop-filter: blur(16px); border-radius: 16px; border: 1px solid rgba(255,255,255,0.15); }
+        .card-header { background: rgba(0,0,0,0.15); border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .badge-tag { background: rgba(255,255,255,0.2); margin: 2px; padding: 4px 10px; border-radius: 12px; font-size: 13px; }
+        .score-big { font-size: 3rem; font-weight: 700; }
+        .score-label { font-size: 0.9rem; opacity: 0.7; }
+        .entry-card { background: rgba(255,255,255,0.08); border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+        a { color: #c3cfe2; }
+    </style>
+</head>
+<body>
+<div class="container py-4" style="max-width:800px;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>📊 情绪日记</h2>
+        <a href="/" class="btn btn-sm btn-outline-light">🧸 回到聊天</a>
+    </div>
+
+    <!-- 周报卡片 -->
+    <div class="glass p-4 mb-4" id="weekly-card">
+        <h5 class="mb-3">📅 本周情绪小结</h5>
+        <div id="weekly-loading" class="text-center py-3">加载中...</div>
+        <div id="weekly-content" style="display:none;">
+            <div class="row text-center mb-3">
+                <div class="col"><div class="score-big" id="w-avg">-</div><div class="score-label">平均心情</div></div>
+                <div class="col"><div class="score-big" id="w-count">-</div><div class="score-label">记录次数</div></div>
+                <div class="col"><div class="score-big" id="w-high">-</div><div class="score-label">最高分</div></div>
+                <div class="col"><div class="score-big" id="w-low">-</div><div class="score-label">最低分</div></div>
+            </div>
+            <canvas id="trend-chart" height="120"></canvas>
+            <div class="row mt-3">
+                <div class="col-md-6">
+                    <h6>🏷️ 高频标签</h6>
+                    <div id="w-tags"></div>
+                </div>
+                <div class="col-md-6">
+                    <h6>💡 有效缓解</h6>
+                    <div id="w-reliefs"></div>
+                </div>
+            </div>
+        </div>
+        <div id="weekly-empty" style="display:none;" class="text-center py-3 opacity-75"></div>
+    </div>
+
+    <!-- 最近记录 -->
+    <div class="glass p-4">
+        <h5 class="mb-3">📝 最近 7 天记录</h5>
+        <div id="entries-list"></div>
+        <div id="entries-empty" class="text-center py-3 opacity-75" style="display:none;">还没有记录，去和搭子聊聊吧～</div>
+    </div>
+</div>
+
+<script>
+let trendChart = null;
+
+async function loadWeekly() {
+    const res = await fetch('/api/diary/weekly-report');
+    const d = await res.json();
+    document.getElementById('weekly-loading').style.display = 'none';
+
+    if (!d.total_entries) {
+        document.getElementById('weekly-empty').textContent = d.message || '暂无数据';
+        document.getElementById('weekly-empty').style.display = 'block';
+        return;
+    }
+    document.getElementById('weekly-content').style.display = 'block';
+    document.getElementById('w-avg').textContent = d.avg_score;
+    document.getElementById('w-count').textContent = d.total_entries;
+    document.getElementById('w-high').textContent = d.highest.score;
+    document.getElementById('w-low').textContent = d.lowest.score;
+
+    // Tags
+    const tagsHtml = (d.top_tags || []).map(([t,c]) => `<span class="badge-tag">${t} ×${c}</span>`).join('');
+    document.getElementById('w-tags').innerHTML = tagsHtml || '<span class="opacity-50">暂无</span>';
+
+    // Reliefs
+    const relHtml = (d.top_reliefs || []).map(([t,c]) => `<span class="badge-tag">${t} ×${c}</span>`).join('');
+    document.getElementById('w-reliefs').innerHTML = relHtml || '<span class="opacity-50">暂无</span>';
+
+    // Chart
+    const labels = d.score_trend.map(s => s.date.slice(5));
+    const scores = d.score_trend.map(s => s.score);
+    const ctx = document.getElementById('trend-chart').getContext('2d');
+    if (trendChart) trendChart.destroy();
+    trendChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: '心情分数',
+                data: scores,
+                borderColor: 'rgba(255,255,255,0.8)',
+                backgroundColor: 'rgba(255,255,255,0.1)',
+                fill: true,
+                tension: 0.4,
+                pointRadius: 5,
+                pointBackgroundColor: '#fff',
+            }]
+        },
+        options: {
+            scales: {
+                y: { min: 1, max: 10, ticks: { color: 'rgba(255,255,255,0.6)' }, grid: { color: 'rgba(255,255,255,0.1)' } },
+                x: { ticks: { color: 'rgba(255,255,255,0.6)' }, grid: { display: false } }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+}
+
+async function loadEntries() {
+    const res = await fetch('/api/diary/recent?days=7');
+    const d = await res.json();
+    const list = document.getElementById('entries-list');
+    if (!d.entries.length) {
+        document.getElementById('entries-empty').style.display = 'block';
+        return;
+    }
+    list.innerHTML = d.entries.reverse().map(e => `
+        <div class="entry-card">
+            <div class="d-flex justify-content-between">
+                <strong>${e.date} ${e.time || ''}</strong>
+                <span style="font-size:1.4rem">${moodEmoji(e.mood_score)} ${e.mood_score}/10</span>
+            </div>
+            <div class="mt-1">${e.summary}</div>
+            <div class="mt-1">${e.keywords.map(k => '<span class="badge-tag">'+k+'</span>').join('')}</div>
+            ${e.trigger ? '<div class="mt-1 opacity-75">触发: ' + e.trigger + '</div>' : ''}
+            ${e.relief_action ? '<div class="opacity-75">缓解: ' + e.relief_action + '</div>' : ''}
+        </div>
+    `).join('');
+}
+
+function moodEmoji(s) {
+    if (s >= 8) return '😊';
+    if (s >= 6) return '🙂';
+    if (s >= 4) return '😐';
+    if (s >= 2) return '😔';
+    return '😢';
+}
+
+loadWeekly();
+loadEntries();
+</script>
+</body>
+</html>
